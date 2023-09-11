@@ -30,7 +30,9 @@ chlorophyll and discharge analysis for the 2022 Oder Algae Bloom.
 - River network data can be downloaded from
   [Inspire](https://inspire-geoportal.ec.europa.eu/download_details.html?view=downloadDetails&resourceId=%2FINSPIRE-d81e48c4-b4cf-11e3-a455-52540004b857_20230602-120602%2Fservices%2F1%2FPullResults%2F451-500%2Fdatasets%2F7&expandedSection=metadata)
   [here](https://wody.isok.gov.pl/atom_web/download/?fileId=107b702c828ca4d55f7317585ba016e8&name=RWB_2016_ManagementRestrictionOrRegulationZone_2020_L.zip).
-- Chlorophyll data: TODO
+- Chlorophyll data: `data/pixel_extraction_Oder_20220701_20220818_full_consolidated.txt`
+  - Created by: TODO
+  - License: TODO
 - Measured discharge: TODO
 - City data
   - `oder_cities.geojson` and `oder_towns.geojson`. 
