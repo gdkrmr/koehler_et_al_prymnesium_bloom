@@ -45,8 +45,7 @@ chlorophyll and discharge analysis for the 2022 Oder Algae Bloom.
 
 ### Analysis
 
-- See `data/.gitignore` for the required files
-
+- See `data/.gitignore` for required files
 - To reproduce the analysis compile `map2wave_supplement.Rmd` using the command
 
   ```sh
