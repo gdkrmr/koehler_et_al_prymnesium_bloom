@@ -33,7 +33,9 @@ chlorophyll and discharge analysis for the 2022 Oder Algae Bloom.
 - Chlorophyll data: `data/pixel_extraction_Oder_20220701_20220818_full_consolidated.txt`
   - Created by: TODO
   - License: TODO
-- Measured discharge: TODO
+- Measured discharge: Department of Water Management 1, Brandenburg State Office
+  for the Environment, 2022, Potsdam, Germany. Link:
+  https://pegelportal.brandenburg.de
 - City data
   - `oder_cities.geojson` and `oder_towns.geojson`. 
   - Geographical location of relevant cities and towns. 
