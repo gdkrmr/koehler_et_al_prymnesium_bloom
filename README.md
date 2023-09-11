@@ -11,7 +11,7 @@ chlorophyll and discharge analysis for the 2022 Oder Algae Bloom.
 - The river network data is available in the `data` folder.
 - The discharge data has to be downloaded from Copernicus Climate Data Store
   (CDS) and is not included in this repository (`data/discharge_{yyyy}_cropped.nc`)
-  - The data can be downloaded using the `download.sh` script. 
+  - The data can be downloaded using the `download.sh` script.
     - Downloading the data requires an API key for CDS.
     - For downloading, the python version in `pyenv` has been used. It contains
       the packages `cdsapi`
@@ -37,8 +37,8 @@ chlorophyll and discharge analysis for the 2022 Oder Algae Bloom.
   for the Environment, 2022, Potsdam, Germany. Link:
   https://pegelportal.brandenburg.de
 - City data
-  - `oder_cities.geojson` and `oder_towns.geojson`. 
-  - Geographical location of relevant cities and towns. 
+  - `oder_cities.geojson` and `oder_towns.geojson`.
+  - Geographical location of relevant cities and towns.
   - Source: Open Street Map.
   - License: The files `data/oder_cities.geojson` and `data/oder_towns.geojson`
     are made available under the Open Database License:
