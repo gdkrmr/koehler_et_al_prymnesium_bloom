@@ -42,18 +42,19 @@ chlorophyll and discharge analysis for the 2022 Oder Algae Bloom.
     contents of the database are licensed under the Database Contents License:
     http://opendatacommons.org/licenses/dbcl/1.0/
 
-See `data/.gitignore` for the required files
 
 ### Analysis
 
-To reproduce the analysis compile `map2wave_supplement.Rmd` using the command
+- See `data/.gitignore` for the required files
 
-```sh
-Rscript -e "rmarkdown::render('map2wave_supplement.Rmd')"
-```
+- To reproduce the analysis compile `map2wave_supplement.Rmd` using the command
 
-in the end of `map2wave_supplement.html` is a `sessionInfo()` output specifying
-all versions of R and R packages used
+  ```sh
+  Rscript -e "rmarkdown::render('map2wave_supplement.Rmd')"
+  ```
+
+  in the end of `map2wave_supplement.html` is a `sessionInfo()` output specifying
+  all versions of R and R packages used
 
 
 ## Cite
