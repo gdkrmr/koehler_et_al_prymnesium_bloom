@@ -1,0 +1,922 @@
+---
+title: "Visualize algea bloom as wave"
+author: "Miguel D. Mahecha, Guido Kraemer with initial suggestions from Veronika Grupp"
+output:
+  html_document:
+    self_contained: yes
+---
+
+
+# Summary
+
+A documented analysis of the 2022 algea bloom in the river Oder based on remote
+sensing estimates of chlorophyll concentrations.
+
+The idea of the script is the following:
+
+* Load the river network as offered by INSPIRE
+* Transform the river of interest into a spatial network using sfnetwork
+* Match the following data to the river network:
+  * The distance for every point to the mouth of the river
+  * The S2 estimated chlorophyll concentrations and their coordinates
+  * the historical reanalysis discharge data from EFAS
+* Additionally we add discharge observation data for the stations
+  Hohensaaten-Finow and Eisenhüttenstadt.
+* Visualize the data
+
+# Analysis
+
+```{r}
+#| message: FALSE
+#| warning: FALSE
+library(tidyverse)
+library(sf)
+library(sfnetworks)
+library(tidygraph)
+library(igraph)
+library(lwgeom)
+library(viridis)
+library(lubridate)
+```
+
+# River network and distances to the mouth
+## Read the river network data and select rivers of interest
+
+Read in the INSPIRE data and extract all the information we need.
+
+```{r}
+inspire_data_path <- "data/RWB_2016_ManagementRestrictionOrRegulationZone_2020_L.gml+xml"
+river_net_full <- st_read(inspire_data_path)
+river_net_full <- select(river_net_full, gml_id, text, geometry)
+```
+
+The following rivers are potentially of interest (Oder and tributaries) We give
+the names in Polish exactly as in the INSPIRE file and in parenthesis the
+English and German names
+
+* ODRA (Oder, Oder)
+* NYSA KŁODZKA (Eastern Neisse, Glatzer Neiße)
+* NYSA ŁUŻYCKA (Lusatian Neiss,  Lausitzer Neiße)
+* WARTA (Warta, Warthe)
+* KANAŁ GLIWICKI Z KŁODNICĄ OD KOZŁÓWKI DO DRAMY
+* KANAŁ GLIWICKI (Gleiwitzer Kanal)
+
+
+```{r}
+river_filter_terms <- c(
+  "ODRA",
+  "NYSA KŁODZKA",
+  "NYSA ŁUŻYCKA",
+  "NYSA ŁUZYCKA",
+  "WARTA",
+  "ZB. PORAJ",
+  "KANAŁ GLIWICKI",
+  "KŁODNICA"
+)
+
+river_filter_idx <- lapply(river_filter_terms, grep, x = river_net_full$text)
+river_filter_idx <- do.call(c, river_filter_idx)
+
+river_net <- river_net_full[river_filter_idx, ]
+
+#### This is the missing piece for the WARTA, we add it manually and get the
+#### number of components from 2 to 1. Coordinates are extracted manually using
+#### qgis
+warta_missing_piece <- matrix(c(19.37629795, 50.59313292,
+                                19.37595002, 50.59261401), 2, 2, byrow = TRUE) %>%
+  list %>%
+  st_multilinestring %>%
+  st_sfc(crs = st_crs(river_net)) %>%
+  st_sf
+
+river_net <- bind_rows(river_net, warta_missing_piece)
+
+ggplot(river_net) + geom_sf() + theme_bw()
+```
+
+## Transform rivers of interest to network
+
+In order to calculate the distance of each point to the mouth of the river we
+need to transform our river network into a connected graph.
+
+The sfnetwork class allows us the retain the geographical information of the
+graph.
+
+```{r}
+
+# The data we read in come as MULTILINESTRING
+river_net_linestring <- st_cast(river_net, "LINESTRING")
+river_net_point <- st_cast(river_net_linestring, "POINT")
+# as_sfnetwork only uses enpoints as nodes, here we cut our data up so that each
+# linestring consists of only two points and therefore every point becomes an
+# endpoint
+river_net_collections <- lwgeom::st_split(river_net_linestring, river_net_point)
+
+# here each geometry is a GEOMETRYCOLLECTION of many LINESTRING, we need to
+# separate them.
+
+river_net_rows <- list()
+for (i in 1:nrow(river_net_collections)) {
+  river_net_collection <- river_net_collections[i, ]
+  ### using c(...) makes the whole thing flat and not nested
+  river_net_rows <- c(
+    river_net_rows,
+    lapply(river_net_collection$geometry[[1]], function(x) {
+      river_net_collection$geometry <- st_sfc(x)
+      river_net_collection
+    }))
+}
+
+
+### a list of length 51000
+length(river_net_rows)
+### takes ~20s
+## rows <- bind_rows(rows)
+### this is a much faster version and should give the same result
+river_net_rows_gml_id <- vapply(river_net_rows, function(x) x$gml_id, "")
+river_net_rows_text <- vapply(river_net_rows, function(x) x$text, "")
+## sapply doesn't work here...
+river_net_rows_geometry <- lapply(river_net_rows, function(x) x$geometry)
+river_net_rows_geometry <- do.call(c, river_net_rows_geometry)
+st_crs(river_net_rows_geometry) <- st_crs(river_net)
+river_net_rows <- st_sf(gml_id = river_net_rows_gml_id,
+                        text = river_net_rows_text,
+                        geometry = river_net_rows_geometry,
+                        crs = st_crs(river_net))
+
+### a sf object with 51000 LINESTRING
+river_net_rows
+
+### Now we create the actual network and add the length of each segment as
+### weights for a later distance calculation.
+river_sfnet = as_sfnetwork(river_net_rows, directed = FALSE) %>%
+  activate("edges") %>%
+  mutate(weight = edge_length())
+
+### Sanity check, this must be a single component!
+stopifnot(components(river_sfnet)$no == 1)
+stopifnot(is_connected(river_sfnet))
+
+### We do not make any plots here because plotting becomes really slow due to
+### the many tiny LINESTRING objects
+```
+
+## Distance calculations
+
+We add the distance to the river mouth as a property to each vertex of the graph
+
+```{r}
+### choose the northern most point as the mouth of the river
+idx_river_mouth <- river_sfnet %>%
+  activate("nodes") %>%
+  st_coordinates %>% {
+    .[, 2]
+  } %>%
+  which.max
+
+### distances from the mouth of the river to all points
+distance_from_mouth <- igraph::distances(river_sfnet, idx_river_mouth) %>%
+  as.vector
+V(river_sfnet)$distance_from_mouth <- distance_from_mouth
+
+### Sanity plot
+river_sfnet %>%
+  activate("nodes") %>% {
+    coords <- st_coordinates(.)
+    tibble(x = coords[, "X"], y = coords[, "Y"],
+           distance_from_mouth = distance_from_mouth)
+  } %>%
+  ggplot() +
+  aes(x = x, y = y, color = distance_from_mouth) +
+  geom_point()
+```
+
+# Match chlorophyll observations to the river network
+## Read chlorophyll concentrations
+
+These data have been generated by Kerstin from Brockmann Consult using the
+coordinates from the same INSPIRE data. The data are organized conceptually as
+tidy data with one observation by location and time.
+
+```{r}
+# Data from Brockmann Consult
+chlorophyll_data_path <- "data/pixel_extraction_Oder_20220701_20220818_full_consolidated.txt"
+
+# Note that we did a manual intervention removing white spaces from river station names
+
+# read into tibble
+# note that we defined column types manually as read_table makes wrong guesses
+chlorophyll_data <- read_table(chlorophyll_data_path,
+                               col_types = list(
+                                 Name = col_character(),
+                                 Date = col_date(format = ""),
+                                 Longitude = col_double(),
+                                 Latitude = col_double(),
+                                 Chlorophyll_mean = col_double(),
+                                 Chlorophyll_sigma = col_double(),
+                                 num_passes = col_double()),
+                               na = "NaN",
+                               skip = 0,
+                               comment = "")
+
+
+# we only care about locations where we do have valid chl observations and skip the rest
+chlorophyll_data <- chlorophyll_data %>%
+  drop_na(Chlorophyll_mean) %>%
+  rename(X = Longitude, Y = Latitude)
+
+chlorophyll_data_sf <- st_as_sf(chlorophyll_data, coords = c("X", "Y"))
+st_crs(chlorophyll_data_sf) <- st_crs(river_net)
+
+ggplot() +
+  geom_sf(data = river_net) +
+  geom_point(data = chlorophyll_data,
+             aes(x = X, y = Y, color = Chlorophyll_mean))
+
+```
+
+
+## Match distance to mouth to our chlorophyll data
+
+```{r}
+### Get the index of the nearest point in the river network to the chlorophyll
+### data
+nearest_vertex_idx <- river_sfnet %>%
+  V %>%
+  `$`(geometry) %>%
+  st_nearest_feature(chlorophyll_data_sf, .)
+
+### We take the distance to the river mouth from the river network an put it
+### into the chlorophyll data
+chlorophyll_data_sf$distance_from_mouth <-
+  V(river_sfnet)$distance_from_mouth[nearest_vertex_idx]
+```
+
+# Add cities and towns
+
+We add some cities to make the maps easier to read. Data taken from Open Street Map.
+
+```{r}
+
+oder_cities <- st_read("data/oder_cities.geojson") %>%
+  st_transform(st_crs(river_sfnet)) %>%
+  select(name)
+oder_towns <- st_read("data/oder_towns.geojson") %>%
+  st_transform(st_crs(river_sfnet)) %>%
+  select(name)
+
+oder_cities <- oder_cities %>%
+  filter(name != "Ostrava")
+
+oder_towns <- oder_towns %>%
+  filter(name == "Frankfurt (Oder)")
+
+oder_cities <-
+  rbind(oder_cities, oder_towns)
+
+
+nearest_vertex_idx <- river_sfnet %>%
+  V %>%
+  `$`(geometry) %>%
+  st_nearest_feature(oder_cities, .)
+
+oder_cities$distance_from_mouth <-
+  V(river_sfnet)$distance_from_mouth[nearest_vertex_idx]
+
+nearest_vertex_idx <- river_sfnet %>%
+  V %>%
+  `$`(geometry) %>%
+  st_nearest_feature(oder_towns, .)
+
+oder_towns$distance_from_mouth <-
+  V(river_sfnet)$distance_from_mouth[nearest_vertex_idx]
+
+oder_towns$distance_from_mouth
+
+ggplot() +
+  geom_sf(data = river_net) +
+  geom_sf(data = oder_cities, aes(color = distance_from_mouth))
+  ## geom_sf(data = oder_towns, aes(color = distance_from_mouth))
+```
+
+# Chlorophyll plots
+## Chlorophyll vs. Distance to mouth
+
+Plot the chlorophyll concentration in function to the mouth of the Oder by time
+slice.
+
+```{r}
+library(ggspatial)
+
+datecuts <- c("2022-07-01", "2022-07-21", "2022-08-01",
+              "2022-08-05", "2022-08-09", "2022-08-16",
+              "2022-08-19") %>%
+  as.Date
+
+startdate <- chlorophyll_data_sf$Date %>% min
+enddate <- chlorophyll_data_sf$Date %>% max
+
+
+fmt <- function(x) format(x, "%d/%m")
+datecutlabels <- paste(fmt(datecuts[-length(datecuts)]),
+                       fmt(datecuts[-1] - as.difftime("24:00:00")),
+                       sep = "–")
+
+chlorophyll_data_sf %>%
+  mutate(date_cut = cut(Date, datecuts, labels = datecutlabels)) %>%
+  ggplot() +
+  aes(x = distance_from_mouth / 1000, y = Chlorophyll_mean) +
+  geom_point(color = "#31a354") +
+  geom_smooth(span = 0.2, color = "#fc8d62", fill = NA) +
+  geom_vline(xintercept = oder_cities$distance_from_mouth / 1000) +
+  geom_text(data = oder_cities, aes(x = distance_from_mouth / 1000, y = Inf, label = name),
+            vjust = 1.1, hjust = 0, angle = -90) +
+  ylim(0, 400) +
+  scale_x_reverse() +
+  labs(y = expression("Chlorophyll concentration [" * mu * "g/l]"),
+       x = "Distance to river mouth [km]") +
+  facet_wrap(vars(date_cut), nrow = 4) +
+  theme_minimal()
+```
+
+## Hexbin plot ##
+
+Just plotting chlorophyll concentrations for each pixel will result in
+overlapping pixels, therefore we need to bin the data before plotting.
+
+```{r, fig.height = 3}
+
+cddf <- chlorophyll_data %>%
+  mutate(date_cut = cut(Date, datecuts, labels = datecutlabels))
+
+ocdf <- cbind(oder_cities, date_cut = factor(levels(cddf$date_cut)[6],
+                                             levels = levels(cddf$date_cut)))
+
+scale_data <- data.frame(date_cut = cddf$date_cut[1],
+                         location = "bl")
+
+cddf %>%
+  ggplot() +
+  geom_sf(data = river_net, color = "gray90") +
+  stat_summary_hex(aes(x = X, y = Y, z = Chlorophyll_mean),
+                   fun = mean, na.rm = TRUE) +
+  geom_sf(data = oder_cities) +
+  geom_segment(data = ocdf,
+               aes(xend = Inf, yend = after_stat(y), geometry = geometry),
+               color = "gray70", stat = "sf_coordinates") +
+  geom_label(data = ocdf,
+             aes(label = name, geometry = geometry),
+             x = Inf, hjust = 1, label.size = NA,
+             color = "gray70", stat = "sf_coordinates") +
+  scale_fill_distiller(expression("Chl. [" * mu * "g/l]"),
+                       palette = "YlGn",
+                       direction = 1) +
+  facet_wrap(vars(date_cut), nrow = 1) +
+  ggspatial::annotation_scale(data = scale_data,
+                              aes(location = location),
+                              text_col = "gray70",
+                              line_col = "gray80",
+                              bar_cols = c("gray80", "white")) +
+  theme_void() +
+  theme(panel.spacing.x = unit(-3, "cm"),
+        strip.text = element_text(hjust = 0))
+
+```
+
+# Discharge data EFAS
+## Data ##
+Discharge comes from the EFAS 6 hourly data. We are using the historical Version
+4.0 data of river discharge in the last 6h data.
+
+- The API call can be found in `download_discharge_data.py`
+- The dataset can be found here: https://cds.climate.copernicus.eu/cdsapp#!/dataset/efas-historical
+
+## functions for accessing EFAS data
+
+```{r}
+library(ncdf4)
+
+discharge_crs <- "+proj=laea +lat_0=52 +lon_0=10 +x_0=4321000 +y_0=3210000 +ellps=GRS80 +units=m +no_defs"
+
+get_latslons <- function(x, reproj = FALSE) {
+  # get latitude longitude mask through manual reprojection because the
+  # latitude/longitude data is not well defined. Testing it there are some clear
+  # discrepancies. They are probably using a different ellipsoid.
+  if (reproj) {
+    xx <- ncvar_get(x, "x")
+    yy <- ncvar_get(x, "y")
+    xxyy_grid <- expand.grid(x = xx, y = yy)
+    grid_lambert <- st_as_sf(xxyy_grid, coords = c("x", "y"),
+                             crs = st_crs(discharge_crs))
+    res <- st_transform(grid_lambert, st_crs(river_net))
+    # alternatively just take the latitudes and longitudes as they are provided
+    # by the data
+  } else {
+    xx <- ncvar_get(x, "longitude") %>% as.vector
+    yy <- ncvar_get(x, "latitude") %>% as.vector
+    xxyy_grid <- data.frame(x = xx, y = yy)
+    res <- st_as_sf(xxyy_grid,
+                    coords = c("x", "y"),
+                    crs = st_crs(river_net))
+  }
+  # HACK: In the end neither of the above methods really worked so we just set a
+  # threshold and remove everything below it. In order to keep indexing still
+  # working we just move the points to a far away location.
+
+  # the data does not really match the river data, so here we remove everything
+  # with < 8 m3s-1 on the first time step.
+  d <- ncvar_get(x, "dis06", count = c(-1, -1, 1))
+  dmask <- as.vector(d > 8)
+  res$geometry[!dmask] <- st_point(c(0, 0))
+  return(res)
+}
+
+get_time <- function(x) {
+  # [time]
+  t_axis <- ncvar_get(x, "time")
+  as.POSIXct(t_axis, origin = "1970-01-01")
+}
+
+get_data <- function(x) {
+  # [x, y, time]
+  ncvar_get(x, "dis06")
+}
+
+mask_margin <- function(x, mask) {
+  # x: array [x, y, time]
+  # mask: matrix [obs, linear[x, y]]
+  dx <- dim(x)
+  dim(x) <- c(dx[1] * dx[2], dx[3])
+  x[mask, ]
+}
+```
+
+## Create mask for discharge data ##
+
+The discharge data is relatively large when transformed into a data.frame in
+long form (i.e. with columns [location, time, discharge]). We need to create a
+mask first to filter the spatial locations we actually need.
+
+```{R}
+discharge_file_names <- dir("data", "discharge_.*_cropped\\.nc$", full.names = TRUE)
+discharge_nc <- lapply(discharge_file_names, nc_open)
+
+discharge_nx <- ncvar_get(discharge_nc[[1]], "x") %>% length
+discharge_ny <- ncvar_get(discharge_nc[[1]], "y") %>% length
+discharge_nyear <- length(discharge_nc)
+
+pixel_locations <- get_latslons(discharge_nc[[1]])
+st_crs(pixel_locations) <- st_crs(chlorophyll_data_sf)
+
+discharge_location_idxs_lin <- st_nearest_feature(chlorophyll_data_sf, pixel_locations)
+discharge_location_idxs_arr <- arrayInd(discharge_location_idxs_lin, c(discharge_nx, discharge_ny))
+
+discharge_nspace <- length(discharge_location_idxs_lin)
+```
+
+## Load discharge data ##
+### Raw data ###
+
+Connecting the data directly with the chlorophyll data would be overkill because
+we would blow up the number of rows by a factor equal to the number of time
+steps. There are many duplicated indices in `discharge_location_idxs_lin` for
+the calculations we only need unique locations in space.
+
+```{r}
+
+discharge_location_idxs_lin_uniq <-
+  sort(unique(discharge_location_idxs_lin))
+
+discharge_data <- discharge_nc %>%
+  lapply(function(x) {
+    x2 <- get_data(x)
+    mask_margin(x2, discharge_location_idxs_lin_uniq)
+  })
+discharge_space <- pixel_locations$geometry[discharge_location_idxs_lin_uniq]
+# The time vectors can have different lengths! maybe a leap year thing?
+discharge_time <- lapply(discharge_nc, get_time)
+
+```
+
+put everything into a data frame
+
+```{r}
+
+# it would be much better to aggregate *before* transforming this into a
+# data.frame. Performance is not great but okay.
+discharge_df_list <- lapply(seq_len(discharge_nyear), function(i) {
+  # [space, time]
+  d <- discharge_data[[i]]
+  # [time]
+  t <- rep(discharge_time[[i]], each = dim(d)[1])
+  # [space]
+  s <- rep(discharge_space, dim(d)[2])
+  # [space]
+  i <- rep(discharge_location_idxs_lin_uniq, dim(d)[2])
+
+  tibble(discharge = as.vector(d), time = t, geometry = s, location_idx = i)
+})
+
+discharge_df <- bind_rows(discharge_df_list)
+```
+
+aggregate and perform MSC and anomaly calculations.
+
+```{r}
+
+# aggregate by day
+discharge_df <- discharge_df %>%
+  # as.Date(xxxxx 00:00h) seems to subtract one day
+  group_by(Date = as.Date(floor_date(time, "days")) + 1, geometry, location_idx) %>%
+  dplyr::summarize(discharge = mean(discharge)) %>%
+  ungroup
+
+# mean seasonal cycle
+discharge_df <- discharge_df %>%
+  group_by(yday = yday(Date), location_idx) %>%
+  mutate(discharge_msc = mean(discharge)) %>%
+  ungroup %>%
+  mutate(discharge_anomaly = discharge - discharge_msc)
+
+# cumulative discharge and discharge anomaly since with zero at june 1
+discharge_df <- discharge_df %>%
+  group_by(year = year(Date), location_idx) %>%
+  arrange(Date) %>%
+  mutate(
+    discharge_anom_cum_june =
+      cumsum(discharge_anomaly) %>%
+      { . - .[month(Date) == 6 & mday(Date) == 1] },
+    discharge_cum_june =
+      cumsum(discharge) %>%
+      { . - .[month(Date) == 6 & mday(Date) == 1] }
+  ) %>%
+  ungroup
+
+# percentile of cumulative discharge
+discharge_df <- discharge_df %>%
+  group_by(yday = yday(Date)) %>%
+  mutate(
+    discharge_anom_cum_june_perc =
+      rank(discharge_anom_cum_june) %>%
+      { . / max(.) * 100 },
+    discharge_cum_june_perc =
+      rank(discharge_cum_june) %>%
+      { . / max(.) * 100 },
+    discharge_perc =
+      rank(discharge) %>%
+      { . / max(.) * 100}
+  ) %>%
+  ungroup
+```
+
+### Discharge Plots
+
+do some plots for sanity check.
+
+```{r}
+
+ggplot(discharge_df) +
+  geom_line(aes(x = Date, y = discharge, group = location_idx, color = "discharge"), alpha = 0.1) +
+  geom_line(aes(x = Date, y = discharge_msc, group = location_idx, color = "msc"), alpha = 0.1)
+
+ggplot(discharge_df) +
+  aes(x = Date, y = discharge_anomaly, group = location_idx) +
+  geom_line(alpha = 0.5)
+
+hist(discharge_df$discharge, main = "histogram of discharge")
+hist(discharge_df$discharge_msc, main = "histogram of discharge msc")
+
+```
+
+## Discharge at specific locations ##
+
+In the end we are only interested in the discharge at some specific locations
+
+River discharge a selected cities along the Oder
+
+```{r}
+discharge_city_idxs <- discharge_location_idxs_lin_uniq[(st_nearest_feature(oder_cities, discharge_space))]
+
+discharge_df %>%
+  filter(location_idx %in% discharge_city_idxs) %>%
+  left_join(tibble(city = oder_cities$name, location_idx = discharge_city_idxs)) %>%
+  ggplot() +
+  aes(x = Date, y = discharge_anomaly) +
+  geom_line() +
+  facet_wrap(vars(city), scales = "free_y")
+```
+
+### Zoom into 2022: ###
+
+We are mostly interested in the algae bloom in summer 2022
+
+```{r}
+discharge_df %>%
+  filter(location_idx %in% discharge_city_idxs) %>%
+  filter(year(Date) == 2022) %>%
+  left_join(tibble(city = oder_cities$name, location_idx = discharge_city_idxs)) %>%
+  ggplot() +
+  aes(x = Date, y = discharge_anomaly) +
+  geom_line() +
+  facet_wrap(vars(city), scales = "free_y")
+
+discharge_df %>%
+  filter(location_idx %in% discharge_city_idxs) %>%
+  filter(year(Date) == 2022) %>%
+  filter(month(Date) %in% 5:8) %>%
+  left_join(tibble(city = oder_cities$name, location_idx = discharge_city_idxs)) %>%
+  ggplot() +
+  geom_line(aes(x = Date, y = discharge, color = "discharge")) +
+  geom_line(aes(x = Date, y = discharge_msc, color = "msc")) +
+  facet_wrap(vars(city), scales = "free_y")
+```
+
+## Cumulative discharge and discharge anomaly ##
+
+prepare the cumulative discharge data
+
+```{r}
+
+discharge_df_cities <- discharge_df %>%
+  filter(location_idx %in% discharge_city_idxs) %>%
+  filter((month(Date) %in% 6:7) | (month(Date) == 8 & mday(Date) < 16)) %>%
+  left_join(tibble(city = oder_cities$name,
+                   location_idx = discharge_city_idxs)) %>%
+  # "normalize" Date by year, so that we can compare different years
+  mutate(Date0 = as.Date(yday(Date), origin = "2021-12-31"))
+```
+
+read in the measured data
+```{r}
+library(zoo)
+data_eh_path <- "data/6030000_Eisenhuettenstadt_Q_TagWerte.csv"
+data_hf_path <- "data/6030800_Hohensaaten-Finow_Q_TagWerte.csv"
+
+read_measured_data <- function(path) {
+  l <- readLines(path, n = 4)
+  city <- l[2] %>% sub("#station_name;", "", ., fixed = TRUE)
+  lat <- l[3] %>% sub("#station_latitude;", "", ., fixed = TRUE)
+  lon <- l[4] %>% sub("#station_longitude;", "", ., fixed = TRUE)
+  df <- read_delim(
+    path,
+    col_names = c("time", "discharge"),
+    comment = "#",
+    delim = ";",
+    locale = readr::locale(tz = "Europe/Berlin"),
+    show_col_type = FALSE
+  )
+  df <- df %>%
+    mutate(X = lon,
+           Y = lat,
+           city = city,
+           Date = lubridate::as_date(time),
+           Date0 = as.Date(yday(Date), origin = "2021-12-31"),
+           yday = yday(Date),
+           year = year(Date)) %>%
+    ## year 1962 starts in september
+    filter(year != 1962) %>%
+    ## ## filter to match the simulated date
+    ## filter(year >= 1991) %>%
+    ## we also need to do some gapfilling
+    mutate(discharge = na.approx(discharge, na.rm = FALSE))
+
+  ## na.approx doesn't fill edges!
+  if(is.na(df$discharge[length(df$discharge)])) {
+    df$discharge[length(df$discharge)] <- df$discharge[length(df$discharge) - 1]
+  }
+  if(is.na(df$discharge[1])) {
+    df$discharge[2]
+  }
+
+  stopifnot(!anyNA(df$discharge))
+
+  ## calculate discharge msc and anomaly
+  df <- df %>%
+    group_by(yday) %>%
+    mutate(discharge_msc = mean(discharge, na.rm = TRUE)) %>%
+    ungroup() %>%
+    mutate(discharge_anomaly = discharge - discharge_msc)
+
+
+  ## calculate cumulative discharge and anomaly
+  df <- df %>%
+    group_by(year) %>%
+    arrange(Date) %>%
+    ## we just calculate the cumulative sum over the entire year and
+    ## substract the date where we want to start (1/6)
+    mutate(
+      discharge_anom_cum_june = cumsum(discharge_anomaly),
+      discharge_anom_cum_june = discharge_anom_cum_june - discharge_anom_cum_june[month(Date) == 6 & mday(Date) == 1],
+      discharge_cum_june = cumsum(discharge),
+      discharge_cum_june = discharge_cum_june - discharge_cum_june[month(Date) == 6 & mday(Date) == 1]
+    ) %>%
+    ungroup()
+  ## filter out the date range and transform int sf object
+  df <- df %>%
+    filter((month(Date) %in% 6:7) | (month(Date) == 8 & mday(Date) < 16)) %>%
+    st_as_sf(coords = c("X", "Y"), crs = st_crs(river_net))
+  return(df)
+}
+
+discharge_df_cities2 <-
+  bind_rows(read_measured_data(data_eh_path),
+            read_measured_data(data_hf_path),
+            discharge_df_cities)
+
+discharge_df_cities2 %>%
+  filter(yday(Date) == yday(max(Date))) %>%
+  arrange(-year(Date))
+
+```
+
+plot cumulative discharge data
+
+```{r, fig.height = 12, fig.width = 12}
+library(ggrepel)
+
+ggplot() +
+  aes(x = Date0,
+      y = discharge_cum_june,
+      color = year == 2022,
+      group = year,
+      label = year,
+      linewidth = as.numeric(year == 2022)) +
+  geom_line(data = discharge_df_cities2) +
+  scale_color_discrete(type = c("grey50", "red")) +
+  geom_text_repel(
+    data = discharge_df_cities2 %>% filter(yday(Date) == yday(max(Date))),
+    segment.colour = "gray80",
+    size = 3,
+    direction = "y",
+    nudge_x = 20,
+    hjust = 0
+  ) +
+  scale_linewidth(range = c(0.5, 1)) +
+  facet_wrap(vars(city), scales = "free_y") +
+  labs(y = "Cumulative discharge [m3s-1]",
+       x = "Date",
+       color = "Year",
+       fill = "Year") +
+  theme_minimal() +
+  theme(legend.justification = c(1, 0),
+        legend.position = "none")
+
+ggplot() +
+  aes(x = Date0, y = discharge_anom_cum_june,
+      color = year(Date) == 2022,
+      group = year(Date),
+      label = year(Date),
+      linewidth = as.numeric(year(Date) == 2022)) +
+  geom_line(data = discharge_df_cities2) +
+  scale_color_discrete(type = c("grey50", "red")) +
+  scale_linewidth() +
+  geom_text_repel(
+    data = discharge_df_cities %>% filter(yday(Date) == yday(max(Date))),
+    color = "gray50",
+    size = 3,
+    direction = "y",
+    nudge_x = 20,
+    hjust = 0
+  ) +
+  scale_linewidth(range = c(0.5, 1)) +
+  facet_wrap(vars(city), scales = "free_y") +
+  labs(y = "Cumulative discharge anomaly [m3s-1]",
+       x = "Date",
+       color = "Year",
+       fill = "Year") +
+  theme(legend.justification = c(1, 0),
+        legend.position = "none")
+```
+
+## Spatial Discharge ##
+
+```{r}
+
+dddf <- discharge_df %>%
+  ## filter(Date >= as.Date("2022-07-01") & Date <= as.Date("2022-08-18")) %>%
+  ## mutate(Date = cut(Date, "2 days")) %>%
+  mutate(date_cut = cut(Date, datecuts, labels = datecutlabels),
+         st_coordinates(discharge_df$geometry) %>% as.data.frame)
+
+ocdf <- cbind(oder_cities, date_cut = factor(levels(cddf$date_cut)[3],
+                                             levels = levels(cddf$date_cut)))
+
+dddf %>%
+  filter(!is.na(date_cut)) %>%
+  ggplot() +
+  geom_sf(data = river_net) +
+  stat_summary_hex(aes(x = X, y = Y, z = discharge_anomaly),
+                   fun = mean, na.rm = TRUE) +
+  ## geom_point(aes(x = X, y = Y, color = Chlorophyll_mean)) +
+  geom_sf(data = oder_cities) +
+  geom_segment(data = ocdf,
+               aes(xend = Inf, yend = after_stat(y), geometry = geometry),
+               color = "gray70", stat = "sf_coordinates") +
+  geom_label(data = ocdf,
+             aes(label = name, geometry = geometry),
+             x = Inf, hjust = 1, label.size = NA,
+             color = "gray70", stat = "sf_coordinates") +
+  scale_fill_gradient2(expression(atop("Discharge anomaly",
+                                       paste("[", m^3, "/s]"))),
+                       high = "#313695",
+                       mid = "#ffffbf",
+                       low = "#a50026") +
+  ## scale_fill_viridis(expression("Chl. [" * mu * "g/l]"), direction = -1) +
+  facet_wrap(vars(date_cut)) +
+  ## facet_wrap(vars(Date)) +
+  theme_void()
+
+```
+
+# Chlorophyll vs. discharge #
+## Join chlorophyll data and discharge data ##
+
+```{r}
+
+chlorophyll_data_sf$location_idx <- discharge_location_idxs_lin
+
+chlorophyll_discharge_df <- full_join(chlorophyll_data_sf,
+          discharge_df %>%
+            select(Date,
+                   discharge_anomaly, discharge, discharge_perc,
+                   location_idx) %>%
+            filter(Date >= min(chlorophyll_data_sf$Date) &
+                     Date <= max(chlorophyll_data_sf$Date)))
+```
+
+
+## Plot correlations ##
+
+correlations on non-log data
+
+
+## Plot correlations 2 ##
+
+```{r}
+cddf <- chlorophyll_discharge_df %>%
+  mutate(date_cut = cut(Date, datecuts, labels = datecutlabels)) 
+
+cities_annotation <- cbind(oder_cities, date_cut = cddf$date_cut[1])
+
+## Discharge anomaly vs. cholorphyll
+ggplot(cddf) +
+  geom_vline(xintercept = oder_cities$distance_from_mouth / 1000, color = "gray70") +
+  geom_text(data = cities_annotation,
+            aes(x = distance_from_mouth / 1000, y = Inf, label = name),
+            vjust = 1.1, hjust = 0, angle = -90, color = "gray70") +
+  aes(x = distance_from_mouth / 1000) +
+  geom_point(aes(y = Chlorophyll_mean, color = "Chlorophyll")) +
+  geom_point(aes(y = discharge_anomaly, color = "Discharge anomaly")) +
+  geom_smooth(aes(y = Chlorophyll_mean), color = "#b2df8a", span = 0.2, fill = NA) +
+  geom_smooth(aes(y = discharge_anomaly), color = "#a6cee3", span = 0.2, fille = NA) +
+  scale_x_reverse() +
+  scale_y_continuous(
+    limits = c(-400, 400),
+    sec.axis = sec_axis(~ ., name = expression("Discharge anomaly [" * m ^ 3 * "/s]"))
+  ) +
+  scale_color_discrete("", type = c("#33a02c", "#1f78b4")) +
+  labs(y = expression("Chlorophyll concentration [" * mu * "g/l]"),
+       x = "Distance to river mouth [km]") +
+  facet_wrap(vars(date_cut), nrow = 4) +
+  theme_minimal() +
+  theme(legend.position = c(0.7, 0),
+        legend.justification = c(0.7, 0),
+        legend.title = element_blank(),
+        legend.margin = margin(0, 0, 0, 0),
+        legend.box.margin = margin(0, 0, 0, 0),
+        legend.background = element_rect(fill = "white", color = NA))
+
+## Discharge anomaly percentile vs clorophyll concentration
+ggplot(cddf) +
+  geom_vline(xintercept = oder_cities$distance_from_mouth / 1000, color = "gray70") +
+  geom_text(data = cities_annotation,
+            aes(x = distance_from_mouth / 1000, y = Inf, label = name),
+            vjust = 1.1, hjust = 0, angle = -90, color = "gray70") +
+  aes(x = distance_from_mouth / 1000) +
+  geom_point(aes(y = Chlorophyll_mean, color = "Chlorophyll")) +
+  geom_point(aes(y = discharge_perc * 3, color = "Discharge percentile")) +
+  geom_smooth(aes(y = Chlorophyll_mean), color = "#b2df8a", span = 0.2, fill = NA) +
+  geom_smooth(aes(y = discharge_perc * 3), color = "#a6cee3", span = 0.2, fill = NA) +
+  scale_x_reverse() +
+  scale_y_continuous(
+    limits = c(0, 300),
+    sec.axis = sec_axis(~ . / 3, name = "Discharge anomaly percentile")
+  ) +
+  scale_color_discrete("", type = c("#33a02c", "#1f78b4")) +
+  labs(y = expression("Chlorophyll concentration [" * mu * "g/l]"),
+       x = "Distance to river mouth [km]") +
+  facet_wrap(vars(date_cut), nrow = 4) +
+  theme_minimal() +
+  theme(legend.position = c(1, 1),
+        legend.justification = c(1, 1),
+        legend.title = element_blank(),
+        legend.margin = margin(0, 0, 0, 0),
+        legend.box.margin = margin(0, 0, 0, 0),
+        legend.background = element_rect(fill = "white", color = NA))
+
+```
+
+
+```{r}
+sessionInfo()
+```
