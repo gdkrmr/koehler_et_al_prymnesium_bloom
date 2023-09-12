@@ -31,8 +31,8 @@ chlorophyll and discharge analysis for the 2022 Oder Algae Bloom.
   [Inspire](https://inspire-geoportal.ec.europa.eu/download_details.html?view=downloadDetails&resourceId=%2FINSPIRE-d81e48c4-b4cf-11e3-a455-52540004b857_20230602-120602%2Fservices%2F1%2FPullResults%2F451-500%2Fdatasets%2F7&expandedSection=metadata)
   [here](https://wody.isok.gov.pl/atom_web/download/?fileId=107b702c828ca4d55f7317585ba016e8&name=RWB_2016_ManagementRestrictionOrRegulationZone_2020_L.zip).
 - Chlorophyll data: `data/chlorophyll_data.csv`
-  - Created by: TODO
-  - License: TODO
+  - Created by: Jorrit Scholze and Kerstin Stelzer, Brockmann Consult GmbH
+  - License: The file data/chlorophyll_data.csv is licensed under a Creative Commons Attribution-NonCommercial 4.0 International License http://creativecommons.org/licenses/by-nc/4.0/
 - Measured discharge, data has to be requested: Department of Water Management
   1, Brandenburg State Office for the Environment, 2022, Potsdam, Germany. Link:
   https://pegelportal.brandenburg.de
