@@ -1,4 +1,4 @@
-# Oder Algae Bloom 2022 spatiotemporal chlorophyll and discharge analysis
+# Oder Algae Bloom 2022 Spatiotemporal Chlorophyll and Discharge Analysis
 
 ## About
 This repository contains the code used to generate the spatiotemporal
