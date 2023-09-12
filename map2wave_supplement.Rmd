@@ -200,25 +200,25 @@ tidy data with one observation by location and time.
 
 ```{r}
 # Data from Brockmann Consult
-chlorophyll_data_path <- "data/pixel_extraction_Oder_20220701_20220818_full_consolidated.txt"
+chlorophyll_data_path <- "data/chlorophyll_data.csv"
 
 # Note that we did a manual intervention removing white spaces from river station names
 
 # read into tibble
 # note that we defined column types manually as read_table makes wrong guesses
-chlorophyll_data <- read_table(chlorophyll_data_path,
-                               col_types = list(
-                                 Name = col_character(),
-                                 Date = col_date(format = ""),
-                                 Longitude = col_double(),
-                                 Latitude = col_double(),
-                                 Chlorophyll_mean = col_double(),
-                                 Chlorophyll_sigma = col_double(),
-                                 num_passes = col_double()),
-                               na = "NaN",
-                               skip = 0,
-                               comment = "")
-
+chlorophyll_data <- read_csv(
+  chlorophyll_data_path,
+  col_types = list(
+    Name = col_character(),
+    Date = col_date(format = ""),
+    Longitude = col_double(),
+    Latitude = col_double(),
+    Chlorophyll_mean = col_double(),
+    Chlorophyll_sigma = col_double(),
+    num_passes = col_double()
+  ),
+  comment = "#"
+)
 
 # we only care about locations where we do have valid chl observations and skip the rest
 chlorophyll_data <- chlorophyll_data %>%
