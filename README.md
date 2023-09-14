@@ -61,6 +61,12 @@ chlorophyll and discharge analysis for the 2022 Oder Algae Bloom.
   in the end of `map2wave_supplement.html` is a `sessionInfo()` output specifying
   all versions of R and R packages used
 
+## License
+
+- The code in this repository is GPL v3 licensed, see the file `[LICENSE](./LICENSE)`,
+  datasets distributed with this repository have their own licenses, see
+  [Required Data](./README.md#Required-Data) for details.
+
 
 ## Cite
 
