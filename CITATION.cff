@@ -1,0 +1,36 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+  - given-names: Jan
+    family-names: Köhler
+  - given-names: Elisabeth
+    family-names: Varga
+  - given-names: Stephanie
+    family-names: Spahr
+  - given-names: Jörn
+    family-names: Gessner
+  - given-names: Kerstin
+    family-names: Stelzer
+  - given-names: Gunnar
+    family-names: Brandt
+  - given-names: Miguel D.
+    family-names: Mahecha
+  - given-names: Guido
+    family-names: Kraemer
+    orcid: https://orcid.org/0000-0003-4865-5041
+  - given-names: Martin
+    family-names: Pusch
+  - given-names: Christian
+    family-names: Wolter
+  - given-names: Katrin
+    family-names: Preuss
+  - given-names: Michael T.
+    family-names: Monaghan
+  - given-names: Matthias
+    family-names: Stöck
+  - given-names: Tobias
+    family-names: Goldhammer
+title: "Unpredicted ecosystem response to compound human impacts in the Oder River 2022 environmental disaster"
+version: 0.0.1
+doi: 10.5281/zenodo.8343700
+date-released: 2023-09-14
