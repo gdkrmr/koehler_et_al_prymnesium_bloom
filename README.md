@@ -1,7 +1,6 @@
 # Oder Algae Bloom 2022 Spatiotemporal Chlorophyll and Discharge Analysis
 
-[![DOI](https://zenodo.org/badge/689942394.svg)](https://zenodo.org/badge/latestdoi/689942394)
-
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.8343700.svg)](https://doi.org/10.5281/zenodo.8343700)
 
 ## About
 This repository contains the code used to generate the spatiotemporal
