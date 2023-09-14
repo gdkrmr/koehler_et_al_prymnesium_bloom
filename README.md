@@ -65,7 +65,7 @@ chlorophyll and discharge analysis for the 2022 Oder Algae Bloom.
 
 - The code in this repository is GPL v3 licensed, see the file `[LICENSE](./LICENSE)`,
   datasets distributed with this repository have their own licenses, see
-  [Required Data](./README.md#Required-Data) for details.
+  [Required Data](./README.md#required-data) for details.
 
 
 ## Cite
