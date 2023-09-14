@@ -35,11 +35,12 @@ chlorophyll and discharge analysis for the 2022 Oder Algae Bloom.
 - Chlorophyll data: `data/chlorophyll_data.csv`
   - Created by: Jorrit Scholze and Kerstin Stelzer, Brockmann Consult GmbH
   - License: The file data/chlorophyll_data.csv is licensed under a Creative Commons Attribution-NonCommercial 4.0 International License http://creativecommons.org/licenses/by-nc/4.0/
-- Measured discharge, data has to be requested
-  (`data/6030800_Hohensaaten-Finow_Q_TagWerte.csv` and
-  `data/6030000_Eisenhuettenstadt_Q_TagWerte.csv`): Department of Water
-  Management 1, Brandenburg State Office for the Environment, 2022, Potsdam,
-  Germany. Link: https://pegelportal.brandenburg.de
+- Measured discharge
+  - data has to be requested (`data/6030800_Hohensaaten-Finow_Q_TagWerte.csv`
+    and `data/6030000_Eisenhuettenstadt_Q_TagWerte.csv`): Department of Water
+    Management 1, Brandenburg State Office for the Environment, 2022, Potsdam,
+    Germany. Link: https://pegelportal.brandenburg.de.
+  - License: https://www.govdata.de/dl-de/by-2-0
 - City data
   - `oder_cities.geojson` and `oder_towns.geojson`.
   - Geographical location of relevant cities and towns.
